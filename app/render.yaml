@@ -1,0 +1,11 @@
+services:
+  - type: web
+    name: resume-matcher-api
+    env: python
+    buildCommand: "pip install --upgrade pip && pip install -r requirements.txt && playwright install chromium && playwright install-deps"
+    startCommand: "uvicorn main:app --host 0.0.0.0 --port $PORT"
+    envVars:
+      - key: PLAYWRIGHT_HEADLESS
+        value: "true"
+      - key: PYTHON_VERSION
+        value: "3.11.0"

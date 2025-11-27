@@ -1,0 +1,99 @@
+# ==========================================
+# Python Backend
+# ==========================================
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+.venv/
+ENV/
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Environment Variables (NEVER COMMIT!)
+.env
+.env.local
+.env.production
+
+# Uploads and temp files
+uploads/
+temp_*
+*.png
+*.pdf
+*.docx
+form_*.png
+screenshot_*.png
+
+# Logs
+*.log
+logs/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*.sublime-workspace
+*.sublime-project
+
+# OS
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# ==========================================
+# Frontend (React/Vite)
+# ==========================================
+node_modules/
+dist/
+dist-ssr/
+*.local
+.vite/
+.vercel/
+
+# Testing
+coverage/
+.nyc_output/
+
+# Production
+build/
+
+# Misc
+.cache/
+.parcel-cache/
+.next/
+out/
+
+# ==========================================
+# Machine Learning Models (if cached)
+# ==========================================
+models/
+*.bin
+*.pt
+*.pth
+transformers_cache/
+
+# Playwright
+.playwright/
+playwright-report/
+test-results/
