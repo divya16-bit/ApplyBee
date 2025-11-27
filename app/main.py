@@ -7,8 +7,8 @@ import asyncio
 import sys
 from bs4 import BeautifulSoup
 from fastapi.middleware.cors import CORSMiddleware
-from app.rate_limit import limiter 
-from app.validators import validate_resume_file 
+from rate_limit import limiter 
+from validators import validate_resume_file 
 
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.util import get_remote_address
