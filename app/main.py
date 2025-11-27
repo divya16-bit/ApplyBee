@@ -25,10 +25,10 @@ print("🔑 HuggingFace API Key Loaded:",
 print("🌐 HuggingFace API URL:", os.getenv("HF_API_URL"))
 
 # Import project modules after env setup
-from app.services import parser
-from app.services import jd_fetcher
-from app.services.matcher_api import router as matcher_router
-from app.services.applier_api import router as applier_api
+from services import parser
+from services import jd_fetcher
+from services.matcher_api import router as matcher_router
+from services.applier_api import router as applier_api
 
 # -------------------------------
 # FastAPI app initialization
