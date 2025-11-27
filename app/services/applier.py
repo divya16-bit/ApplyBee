@@ -4,11 +4,11 @@ import logging
 import json
 from loguru import logger
 from datetime import datetime
-from app.services.playwright_runner_async import run_playwright_autofill
-from app.services.parser import parse_resume
-from app.services.jd_fetcher import fetch_job_description
-from app.services.gist_generator import generate_gist
-from app.services.llm_client import last_llm_used
+from services.playwright_runner_async import run_playwright_autofill
+from services.parser import parse_resume
+from services.jd_fetcher import fetch_job_description
+from services.gist_generator import generate_gist
+from services.llm_client import last_llm_used
 
 logger = logging.getLogger(__name__)
 

@@ -7,10 +7,10 @@ import shutil
 import os
 import re
 
-from app.services import matcher
-from app.services.jd_fetcher import fetch_job_description, is_allowed_job_url
-from app.rate_limit import limiter
-from app.validators import validate_resume_file 
+from services import matcher
+from services.jd_fetcher import fetch_job_description, is_allowed_job_url
+from rate_limit import limiter
+from validators import validate_resume_file 
 
 router = APIRouter()
 UPLOAD_DIR = "uploads"
@@ -100,7 +100,7 @@ async def auto_match(
         jd_skills_extracted = [k.get("name") for k in jd_keywords if k.get("name")]
 
         # Parse resume to text
-        from app.services import parser as resume_parser
+        from services import parser as resume_parser
         ext = os.path.splitext(resume_path)[1].lower()
         if ext == ".pdf":
             resume_text = await run_in_threadpool(resume_parser.parse_pdf, resume_path)

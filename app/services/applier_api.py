@@ -4,9 +4,9 @@ from datetime import datetime
 from fastapi import APIRouter, UploadFile, Form, File, HTTPException, Request  # 👈 ADD Request
 from loguru import logger
 
-from app.services.applier import apply_to_greenhouse  # async Playwright function
-from app.rate_limit import limiter
-from app.validators import validate_resume_file
+from services.applier import apply_to_greenhouse  # async Playwright function
+from rate_limit import limiter
+from validators import validate_resume_file
 
 router = APIRouter()
 

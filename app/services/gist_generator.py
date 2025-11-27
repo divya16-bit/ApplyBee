@@ -1,7 +1,7 @@
 
 import json
 from loguru import logger
-from app.services.llm_client import call_gpt_model
+from services.llm_client import call_gpt_model
 
 
 # ✅ Helper: safely trim long text to avoid model overload
