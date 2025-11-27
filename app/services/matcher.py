@@ -18,7 +18,9 @@ from app.services.skill_normalizer import normalize_skills
 from datetime import datetime
 
 STOPWORDS = sk_text.ENGLISH_STOP_WORDS
-USE_SEMANTIC = str(os.getenv("MATCHER_SEMANTIC", "1")).lower() not in {"0", "false", "no"}
+#USE_SEMANTIC = str(os.getenv("MATCHER_SEMANTIC", "1")).lower() not in {"0", "false", "no"}
+USE_SEMANTIC = str(os.getenv("MATCHER_SEMANTIC", "0")).lower() not in {"0", "false", "no"}  # ← Changed "1" to "0"
+
 
 # -----------------------------
 # Normalization helpers
