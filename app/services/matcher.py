@@ -13,8 +13,8 @@ from sklearn.feature_extraction import text as sk_text
 from sentence_transformers import SentenceTransformer, util
 
 # Use your parser service (supports PDF + DOCX)
-from app.services import parser as resume_parser
-from app.services.skill_normalizer import normalize_skills
+from services import parser as resume_parser
+from services.skill_normalizer import normalize_skills
 from datetime import datetime
 
 STOPWORDS = sk_text.ENGLISH_STOP_WORDS

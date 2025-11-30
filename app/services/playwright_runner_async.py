@@ -4,7 +4,7 @@ import random
 from datetime import datetime
 from loguru import logger
 from playwright.async_api import async_playwright
-from concurrency_limit import playwright_semaphore 
+from app.concurrency_limit import playwright_semaphore 
 from dotenv import load_dotenv
 
 
