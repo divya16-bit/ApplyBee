@@ -35,7 +35,7 @@ COPY requirements.txt .
 
 # Install Python dependencies (use production requirements if exists, else regular)
 RUN pip install --no-cache-dir --upgrade pip && \
-    pip install --no-cache-dir -r requirements-prod.txt || pip install --no-cache-dir -r requirements.txt
+    pip install --no-cache-dir -r requirements.txt || pip install --no-cache-dir -r requirements_old.txt
 
 # Install Playwright browsers
 RUN playwright install chromium
