@@ -60,6 +60,10 @@ if frontend_url:
     ALLOWED_ORIGINS.append(frontend_url)
     print(f"✅ Added production frontend: {frontend_url}")
 
+# ✅ CRITICAL: Allow Chrome Extension requests
+# Chrome extensions have origin like: chrome-extension://abc123...
+# We need to allow ALL chrome-extension origins
+
 # ✅ For Vercel preview deployments (optional but useful)
 vercel_url = os.getenv("VERCEL_URL")
 if vercel_url:
@@ -72,6 +76,7 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+    allow_origin_regex=r"^chrome-extension://.*$"  # ✅ Allow all Chrome extensions
 )
 
 # ============================================
