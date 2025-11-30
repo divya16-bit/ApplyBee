@@ -1,8 +1,30 @@
 # app/services/skill_normalizer.py
 from sentence_transformers import SentenceTransformer, util
+import os
 
-# Load a free, lightweight model (runs on CPU fine)
-model = SentenceTransformer("all-MiniLM-L6-v2")
+from sentence_transformers import SentenceTransformer, util
+import os
+
+# Lazy load model
+_model = None
+
+def get_normalizer_model():
+    global _model
+    if _model is None:
+        print("🔄 Loading normalizer model...")
+        _model = SentenceTransformer("all-MiniLM-L6-v2")
+        print("✅ Normalizer model loaded")
+    return _model
+
+# Pre-load if semantic matching enabled
+if os.getenv("MATCHER_SEMANTIC", "1") != "0":
+    try:
+        model = get_normalizer_model()
+    except Exception as e:
+        print(f"⚠️ Could not pre-load normalizer: {e}")
+        model = None
+else:
+    model = None
 
 # Expanded canonical categories
 CATEGORIES = {
@@ -103,6 +125,13 @@ def normalize_skills(raw_skills, threshold: float = 0.6):
     """
     if not raw_skills:
         return []
+    
+    # Get model (should already be loaded)
+    m = model if model is not None else get_normalizer_model()
+    
+    if m is None:
+        # Fallback if model couldn't load
+        return [(skill, "other", 0.0) for skill in raw_skills]
 
     results = []
     for skill in raw_skills:

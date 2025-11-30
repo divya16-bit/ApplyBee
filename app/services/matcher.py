@@ -13,8 +13,8 @@ from sklearn.feature_extraction import text as sk_text
 from sentence_transformers import SentenceTransformer, util
 
 # Use your parser service (supports PDF + DOCX)
-from services import parser as resume_parser
-from services.skill_normalizer import normalize_skills
+from app.services import parser as resume_parser
+from app.services.skill_normalizer import normalize_skills
 from datetime import datetime
 
 STOPWORDS = sk_text.ENGLISH_STOP_WORDS
@@ -236,7 +236,7 @@ def extract_years_of_experience(text: str, source: str = "resume"):
 
 
 # -----------------------------
-# Semantic model (lazy load)
+# Semantic model 
 # -----------------------------
 _MODEL_NAME = os.getenv("SENTENCE_MODEL", "all-MiniLM-L6-v2")
 _semantic_model: SentenceTransformer | None = None
@@ -244,8 +244,21 @@ _semantic_model: SentenceTransformer | None = None
 def get_model() -> SentenceTransformer:
     global _semantic_model
     if _semantic_model is None:
+        print("🔄 Loading sentence transformer model...")
         _semantic_model = SentenceTransformer(_MODEL_NAME)
+        print("✅ Model loaded successfully")
     return _semantic_model
+
+# ✅ PRE-LOAD MODEL ON MODULE IMPORT (during server startup)
+USE_SEMANTIC = str(os.getenv("MATCHER_SEMANTIC", "1")).lower() not in {"0", "false", "no"}
+if USE_SEMANTIC:
+    print("🚀 Pre-loading model at startup...")
+    try:
+        _ = get_model()
+        print("✅ Model ready for requests")
+    except Exception as e:
+        print(f"❌ Failed to load model: {e}")
+        USE_SEMANTIC = False
 
 def chunk_text_words(text: str, chunk_size: int = 220, overlap: int = 40) -> List[str]:
     words = text.split()
