@@ -60,6 +60,7 @@ from services import parser
 from services import jd_fetcher
 from services.matcher_api import router as matcher_router
 from services.applier_api import router as applier_api
+from services.gist_generator import generate_gist   # <-- you already have this file
 
 app = FastAPI(
     title="AI Job Applier Backend",
@@ -107,6 +108,22 @@ app.add_middleware(
     allow_headers=["*"],
     allow_origin_regex=r"^chrome-extension://.*$"  # ✅ Allow all Chrome extensions
 )
+
+#pydantic models
+class FieldItem(BaseModel):
+    label: str
+    type: str
+    options: Optional[List[str]] = None
+
+class GistRequest(BaseModel):
+    resume: Dict[str, Any]
+    job_description: Optional[str] = None
+    fields: List[FieldItem]
+
+class GistResponse(BaseModel):
+    success: bool
+    message: str
+    answers: Dict[str, Any]
 
 # ============================================
 # Register routers
@@ -235,6 +252,47 @@ async def fetch_jd(
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"JD fetch failed: {str(e)}")
 
+
+# -------------------------------
+# Generate Gists Endpoint
+# -------------------------------
+@app.post("/generate-gists", response_model=GistResponse)
+@limiter.limit("20/minute")
+async def generate_gists_endpoint(
+    request: Request,
+    data: GistRequest
+):
+    """
+    Extension sends:
+    - resume (parsed_resume dict)
+    - job_description text
+    - fields = [ {label, type, options}, ... ]
+
+    We call your existing generate_gist() with:
+    parsed_resume, jd_data, form_fields
+    """
+
+    try:
+        # Match EXACT signature of your working function:
+        # async def generate_gist(parsed_resume, jd_data, form_fields)
+        
+        answers = await generate_gist(
+            data.resume,            # parsed_resume
+            {"job_description": data.job_description},  # jd_data (dict required)
+            [field.dict() for field in data.fields]     # form_fields
+        )
+
+        return GistResponse(
+            success=True,
+            message="Gists generated successfully.",
+            answers=answers
+        )
+
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Gist generation failed: {str(e)}"
+        )
 
 # ============================================
 # ✅ ADD THIS - For Render deployment
