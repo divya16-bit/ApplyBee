@@ -14,6 +14,8 @@ from validators import validate_resume_file
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
+from pydantic import BaseModel
+from typing import List, Optional, Dict, Any
 
 # --- Windows asyncio fix for Playwright ---
 if sys.platform.startswith("win"):
