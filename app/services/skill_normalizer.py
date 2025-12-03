@@ -2,8 +2,6 @@
 from sentence_transformers import SentenceTransformer, util
 import os
 
-from sentence_transformers import SentenceTransformer, util
-import os
 
 # Lazy load model
 _model = None
