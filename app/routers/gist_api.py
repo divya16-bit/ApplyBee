@@ -3,9 +3,9 @@ from fastapi import APIRouter, HTTPException, BackgroundTasks
 from typing import Optional
 from starlette.concurrency import run_in_threadpool
 from pydantic import BaseModel
-from app.models.gist_models import GistRequest, GistResponse
-from app.services import gist_generator
-from app.services import jd_fetcher
+from models.gist_models import GistRequest, GistResponse
+from services import gist_generator
+from services import jd_fetcher
 
 router = APIRouter()
 

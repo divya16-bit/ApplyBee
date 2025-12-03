@@ -2,9 +2,9 @@
 from fastapi import APIRouter, HTTPException
 from starlette.concurrency import run_in_threadpool
 from typing import Optional
-from app.models.score_models import ScoreRequest, ScoreResponse
-from app.services import jd_fetcher, matcher
-from app.services.score_engine import compute_resume_score
+from models.score_models import ScoreRequest, ScoreResponse
+from services import jd_fetcher, matcher
+from services.score_engine import compute_resume_score
 
 router = APIRouter()
 

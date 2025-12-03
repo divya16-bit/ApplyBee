@@ -1,7 +1,7 @@
 # services/score_engine.py
 from typing import Dict, Any, List
-from app.services import matcher
-from app.services.skill_normalizer import normalize_skills
+from services import matcher
+from services.skill_normalizer import normalize_skills
 from loguru import logger
 from app.services.llm_client import call_gpt_model
 

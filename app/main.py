@@ -4,8 +4,8 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 # Import routers
-from app.routers.gist_api import router as gist_router
-from app.routers.score_api import router as score_router
+from routers.gist_api import router as gist_router
+from routers.score_api import router as score_router
 
 app = FastAPI(
     title="Extension Backend - Gist & Resume Score",
