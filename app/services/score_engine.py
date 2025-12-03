@@ -3,7 +3,7 @@ from typing import Dict, Any, List
 from services import matcher
 from services.skill_normalizer import normalize_skills
 from loguru import logger
-from app.services.llm_client import call_gpt_model
+from services.llm_client import call_gpt_model
 
 async def compute_resume_score(parsed_resume: Dict[str, Any],
                                jd_sections: Dict[str, List[str]],
