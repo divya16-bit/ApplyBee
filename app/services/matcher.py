@@ -436,14 +436,16 @@ def calculate_match_score_text(
     missing = [m for m in missing if len(m) <= 30 and m not in NOISE_TOKENS and m not in GENERIC_DOMAIN_TERMS]
     
     # Additional filter using skill normalizer: exclude skills that normalize poorly
-    # Skills that normalize to "other" with low score are likely too generic or not actionable
+    # Skills that normalize to "other" with very low score are likely too generic
+    # But be less aggressive - keep skills that might be valid even if not in our categories
     if missing:
         missing_norm = normalize_skills(missing, threshold=0.4)
         # Keep skills that either:
         # 1. Normalize to a specific category (not "other"), OR
-        # 2. Have a high similarity score even if "other" (>= 0.5) - might be a valid skill not in categories
+        # 2. Have a reasonable similarity score even if "other" (>= 0.3) - might be a valid skill not in categories
+        # This is less strict to avoid filtering out valid technical skills
         missing = [m for m, (_, cat, score) in zip(missing, missing_norm) 
-                   if cat != "other" or score >= 0.5]
+                   if cat != "other" or score >= 0.3]
 
     # Normalize both resume and JD skills
     resume_norm = normalize_skills(list(resume_skills))
@@ -492,6 +494,18 @@ def calculate_match_score_text(
 
     normalized_overlap = dedupe_normalized(normalized_overlap)
     normalized_missing = dedupe_normalized(normalized_missing)
+    
+    # Fallback: if normalized_missing is empty but we have missing skills from direct comparison,
+    # include some from the direct missing list (they passed initial filters)
+    if not normalized_missing and missing:
+        # Take top missing skills that are short and not generic
+        for m in missing[:10]:  # Limit to top 10
+            if len(m) <= 30 and m not in GENERIC_DOMAIN_TERMS:
+                # Quick check: if it's a known tech skill or looks like one
+                if any(char.isalnum() for char in m) and not any(phrase in m.lower() for phrase in [
+                    'experience', 'working', 'familiar', 'comfortable', 'you', 'collaborate'
+                ]):
+                    normalized_missing.append((m, "other", 0.5))  # Default category and score
 
     # --- FIX: Only remove EXACT matches, not contextual ---
     # Get skills from normalized_overlap that are from JD side
