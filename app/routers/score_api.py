@@ -24,9 +24,21 @@ async def resume_score_endpoint(req: ScoreRequest):
         jd_full_text = ""
 
         if req.jd_url:
-            jd_res = jd_fetcher.fetch_job_description(req.jd_url)
-            jd_sections = jd_res.get("jd_sections", {}) if jd_res else {}
-            jd_full_text = jd_res.get("job_description_full", "") if jd_res else ""
+            try:
+                jd_res = jd_fetcher.fetch_job_description(req.jd_url)
+                if jd_res and isinstance(jd_res, dict):
+                    jd_sections = jd_res.get("jd_sections", {})
+                    jd_full_text = jd_res.get("job_description_full", "")
+                else:
+                    # Fallback if fetcher returns unexpected format
+                    jd_sections = {}
+                    jd_full_text = ""
+            except Exception as fetch_err:
+                # Log but continue with empty JD - score engine can still work
+                import logging
+                logging.warning(f"JD fetch failed for {req.jd_url}: {fetch_err}")
+                jd_sections = {}
+                jd_full_text = ""
         else:
             jd_full_text = req.job_description or ""
 
