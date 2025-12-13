@@ -326,6 +326,13 @@ NOISE_TOKENS = {
     "life","day","ability","world","record","notice","customers"
 }
 
+# Generic domain terms that are too broad to be actionable skills
+GENERIC_DOMAIN_TERMS = {
+    "frontend", "backend", "fullstack", "full-stack", "full stack",
+    "ui", "ux", "devops", "cloud", "web", "mobile", "desktop",
+    "software", "development", "engineering", "programming", "coding"
+}
+
 def extract_skills_simple(text_raw: str) -> set[str]:
     t = preprocess_text(text_raw)
     tokens = set(t.split())
@@ -425,7 +432,18 @@ def calculate_match_score_text(
     
     # Filter missing skills to remove any that look like job descriptions (safety check)
     # Keep only short technical terms (max 30 chars) that are actual skills
-    missing = [m for m in missing if len(m) <= 30 and m not in NOISE_TOKENS]
+    # Exclude generic domain terms (too broad, not actionable)
+    missing = [m for m in missing if len(m) <= 30 and m not in NOISE_TOKENS and m not in GENERIC_DOMAIN_TERMS]
+    
+    # Additional filter using skill normalizer: exclude skills that normalize poorly
+    # Skills that normalize to "other" with low score are likely too generic or not actionable
+    if missing:
+        missing_norm = normalize_skills(missing, threshold=0.4)
+        # Keep skills that either:
+        # 1. Normalize to a specific category (not "other"), OR
+        # 2. Have a high similarity score even if "other" (>= 0.5) - might be a valid skill not in categories
+        missing = [m for m, (_, cat, score) in zip(missing, missing_norm) 
+                   if cat != "other" or score >= 0.5]
 
     # Normalize both resume and JD skills
     resume_norm = normalize_skills(list(resume_skills))
@@ -463,7 +481,7 @@ def calculate_match_score_text(
     for j, jc, js in jd_norm:
         if jc not in resume_cats and jc != "other":
             # Filter out long sentences and job description phrases
-            if len(j) <= 30 and j not in NOISE_TOKENS:
+            if len(j) <= 30 and j not in NOISE_TOKENS and j not in GENERIC_DOMAIN_TERMS:
                 # Additional filter: exclude if it looks like a sentence/phrase
                 if not any(phrase in j.lower() for phrase in [
                     'experience with', 'working with', 'familiar with', 'comfortable with',
