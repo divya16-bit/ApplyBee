@@ -382,7 +382,19 @@ def calculate_match_score_text(
         logger.warning("Skills section empty, extracting from full JD text")
         jd_skill_terms = extract_skills_simple(jd_full_text)
     else:
-        jd_skill_terms = {apply_aliases(str(s).strip().lower()) for s in jd_skills_extracted} if jd_skills_extracted else extract_skills_simple(jd_skills_raw)
+        # Extract skills from jd_skills_extracted - these might be full sentences, so extract technical skills from them
+        if jd_skills_extracted:
+            # jd_skills_extracted contains raw text from JD skills section (could be sentences)
+            # Extract technical skills from each item, then combine
+            extracted_skills = set()
+            for item in jd_skills_extracted:
+                if isinstance(item, str):
+                    # Extract technical skills from this sentence/item
+                    skills_from_item = extract_skills_simple(item)
+                    extracted_skills.update(skills_from_item)
+            jd_skill_terms = extracted_skills if extracted_skills else extract_skills_simple(jd_skills_raw)
+        else:
+            jd_skill_terms = extract_skills_simple(jd_skills_raw)
 
     resp_combined, resp_tfidf, resp_sem = section_match(resume_text_norm, resume_chunks_emb, jd_resp_raw)
     skills_combined, skills_tfidf, skills_sem = section_match(resume_text_norm, resume_chunks_emb, jd_skills_raw)
@@ -393,10 +405,27 @@ def calculate_match_score_text(
     # Skill Extraction & Normalization
     # -----------------------------
     resume_skills = extract_skills_simple(resume_text_raw)
-    jd_skill_terms = {apply_aliases(str(s).strip().lower()) for s in jd_skills_extracted} if jd_skills_extracted else extract_skills_simple(jd_skills_raw)
+    
+    # Extract skills from jd_skills_extracted - filter to only technical skills
+    if jd_skills_extracted:
+        # jd_skills_extracted contains raw text from JD skills section (could be sentences)
+        # Extract technical skills from each item, then combine
+        extracted_skills = set()
+        for item in jd_skills_extracted:
+            if isinstance(item, str):
+                # Extract technical skills from this sentence/item
+                skills_from_item = extract_skills_simple(item)
+                extracted_skills.update(skills_from_item)
+        jd_skill_terms = extracted_skills if extracted_skills else extract_skills_simple(jd_skills_raw)
+    else:
+        jd_skill_terms = extract_skills_simple(jd_skills_raw)
    
     common = sorted(list(resume_skills & jd_skill_terms))[:30]
     missing = sorted(list(jd_skill_terms - resume_skills))[:30]
+    
+    # Filter missing skills to remove any that look like job descriptions (safety check)
+    # Keep only short technical terms (max 30 chars) that are actual skills
+    missing = [m for m in missing if len(m) <= 30 and m not in NOISE_TOKENS]
 
     # Normalize both resume and JD skills
     resume_norm = normalize_skills(list(resume_skills))
@@ -430,9 +459,18 @@ def calculate_match_score_text(
                 
 
     # Contextual missing (JD categories not present in resume)
+    # Only include actual technical skills, not job description sentences
     for j, jc, js in jd_norm:
         if jc not in resume_cats and jc != "other":
-            normalized_missing.append((j, jc, js))
+            # Filter out long sentences and job description phrases
+            if len(j) <= 30 and j not in NOISE_TOKENS:
+                # Additional filter: exclude if it looks like a sentence/phrase
+                if not any(phrase in j.lower() for phrase in [
+                    'experience with', 'working with', 'familiar with', 'comfortable with',
+                    'you will', "you'll", 'collaborate', 'mentor', 'improve workflows',
+                    'ability to', 'strong', 'excellent', 'good', 'knowledge of'
+                ]):
+                    normalized_missing.append((j, jc, js))
 
     normalized_overlap = dedupe_normalized(normalized_overlap)
     normalized_missing = dedupe_normalized(normalized_missing)
