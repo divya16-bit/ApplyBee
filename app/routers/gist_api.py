@@ -1,41 +1,42 @@
 # routers/gist_api.py
-from fastapi import APIRouter, HTTPException, BackgroundTasks
-from typing import Optional
-from starlette.concurrency import run_in_threadpool
+from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
-from models.gist_models import GistRequest, GistResponse
+from typing import List, Dict, Any, Optional
 from services import gist_generator
-from services import jd_fetcher
+from starlette.concurrency import run_in_threadpool
 
 router = APIRouter()
 
-@router.post("/generate-gists", response_model=GistResponse)
-async def generate_gists_endpoint(data: GistRequest):
+class GetGistRequest(BaseModel):
+    resume: str
+    jd: Optional[str] = ""
+    labels: List[str]
+
+class GetGistResponse(BaseModel):
+    success: bool
+    detail: str
+    answers: Dict[str, str]
+
+@router.post("/get-gist", response_model=GetGistResponse)
+async def get_gist_endpoint(payload: GetGistRequest):
     """
-    Accepts parsed_resume (dict) + optional job_description or job_url + fields list.
-    Returns mapping: label -> answer (uses your existing generate_gist).
+    Accepts:
+      {
+        "resume": "...text...",
+        "jd": "...text...",
+        "labels": ["Full Name", "Email", "Years of experience", ...]
+      }
+
+    Returns:
+      { "Full Name": "Rajni", "Email": "...", ... }
     """
     try:
-        parsed_resume = data.parsed_resume or {}
-        fields = data.fields or []
-        jd_data = {}
+        parsed_resume = {"raw_text": payload.resume}
+        jd_data = {"job_description": payload.jd or ""}
+        labels = payload.labels or []
 
-        # If job_url provided, fetch JD via jd_fetcher
-        if data.job_url:
-            # jd_fetcher.fetch_job_description can be blocking; run in threadpool
-            try:
-                jd_res = await run_in_threadpool(jd_fetcher.fetch_job_description, data.job_url)
-                jd_data = jd_res or {}
-            except Exception as e:
-                # If JD fetch failed, continue with empty jd_data
-                jd_data = {"job_description": data.job_description or ""}
-        else:
-            # prefer job_description string if provided
-            jd_data = {"job_description": data.job_description or ""}
-
-        # Call your existing generate_gist (async)
-        answers = await gist_generator.generate_gist(parsed_resume, jd_data, fields)
-        return GistResponse(success=True, message="Gists generated successfully.", answers=answers)
-
+        # run potentially CPU/IO work in threadpool if needed
+        answers = await gist_generator.generate_gist_for_labels(parsed_resume, jd_data, labels)
+        return GetGistResponse(success=True, detail="Gists generated", answers=answers)
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Gist generation failed: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Gist generation failed: {e}")

@@ -1,273 +1,240 @@
-
+# services/gist_generator.py
+import re
 import json
+from typing import Dict, List, Any
 from loguru import logger
-from services.llm_client import call_gpt_model
 
+try:
+    # If you have existing llm client, use it for fallback LLM generation
+    from services.llm_client import call_gpt_model
+    _LLM_AVAILABLE = True
+except Exception:
+    _LLM_AVAILABLE = False
 
-# ✅ Helper: safely trim long text to avoid model overload
-def trim_text(text: str, max_chars: int = 4000) -> str:
+# -------------------------
+# Basic extractors (resume)
+# -------------------------
+_email_re = re.compile(r'[\w\.-]+@[\w\.-]+\.\w+')
+_phone_re = re.compile(r'(\+?\d{1,3}[\s-]?)?(\d{6,12})')
+_link_re = re.compile(r'(https?://[^\s]+)')
+_name_heuristics_re = re.compile(r'^[A-Z][a-z]+\s+[A-Z][a-z]+')  # naive first-last
+
+def extract_email(text: str):
+    m = _email_re.search(text)
+    return m.group(0).strip() if m else None
+
+def extract_phone(text: str):
+    m = _phone_re.search(text)
+    if not m:
+        return None
+    return re.sub(r'\s+', '', m.group(0))
+
+def extract_links(text: str):
+    return _link_re.findall(text or "")
+
+def extract_name_from_text(text: str):
+    # Try to find a plausible name near top lines
+    lines = [l.strip() for l in (text or "").splitlines() if l.strip()]
+    if not lines:
+        return None
+    # Look at first 6 lines for a name-like pattern
+    for ln in lines[:6]:
+        if len(ln.split()) <= 4 and name_like(ln):
+            return ln.strip()
+    # fallback to regex
+    m = _name_heuristics_re.search(text or "")
+    return m.group(0).strip() if m else None
+
+def name_like(s: str):
+    # Basic check: words start with capital letter and are alphabetic
+    parts = s.split()
+    if len(parts) < 2 or len(parts) > 4:
+        return False
+    for p in parts:
+        if not p[0].isupper():
+            return False
+    return True
+
+def extract_years_of_experience(text: str):
+    txt = (text or "").lower()
+    # Look for patterns like '5 years', '5+ years', '4 yrs', 'total years of experience: 3'
+    m = re.search(r'(\d{1,2})(\+)?\s*(?:years|yrs)\b', txt)
+    if m:
+        return f"{m.group(1)} years"
+    # look for date ranges and estimate
+    years = re.findall(r'(19|20)\d{2}', text or "")
+    if len(years) >= 2:
+        try:
+            low = int(min(years))
+            high = int(max(years))
+            est = high - low
+            if est > 0:
+                return f"{est} years"
+        except:
+            pass
+    # fallback heuristics
+    if 'senior' in txt:
+        return "5+ years"
+    if 'intern' in txt.lower():
+        return "0-1 years"
+    return None
+
+# -------------------------
+# Matching helpers
+# -------------------------
+def simple_token_overlap(a: str, b: str) -> float:
+    if not a or not b:
+        return 0.0
+    atoks = set(re.findall(r'\w+', a.lower()))
+    btoks = set(re.findall(r'\w+', b.lower()))
+    if not atoks or not btoks:
+        return 0.0
+    inter = atoks.intersection(btoks)
+    return len(inter) / max(1, min(len(atoks), len(btoks)))
+
+def is_yes_no_question(label: str) -> bool:
+    lbl = (label or "").lower()
+    return any(x in lbl for x in ["do you", "have you", "are you", "any experience", "experience in", "do you have", "yes/no", "yes or no", "would you"])
+
+def detect_technology_from_label(label: str):
+    lbl = (label or "").lower()
+    for tech in ["react", "python", "java", "c++", "c#", "node", "javascript", "typescript", "aws", "azure", "docker", "kubernetes"]:
+        if tech in lbl:
+            return tech
+    return None
+
+# -------------------------
+# Main generator
+# -------------------------
+async def generate_gist_for_labels(parsed_resume: Dict[str, Any], jd_data: Dict[str, Any], labels: List[str]) -> Dict[str, str]:
     """
-    Trims text safely if it exceeds token limits (~4k chars).
-    """
-    if not text:
-        return ""
-    text = text.strip()
-    return text[:max_chars] + "..." if len(text) > max_chars else text
-
-
-# ✅ Helper: safely parse Gemma/LLM output (handles non-JSON text)
-def safe_parse_gist_output(response_text: str):
-    """
-    Safely parse Gemma's output; fallback to key-value dict if not valid JSON.
+    Generates mapping label -> short answer.
+    parsed_resume: {"raw_text": "...", ...}
+    jd_data: {"job_description": "..."}
+    labels: list[str]
     """
     try:
-        return json.loads(response_text)
-    except json.JSONDecodeError:
-        logger.warning("⚠️ LLM returned non-JSON output — attempting fallback parsing")
+        resume_text = parsed_resume.get("raw_text", "") if isinstance(parsed_resume, dict) else str(parsed_resume or "")
+        jd_text = jd_data.get("job_description", "") if isinstance(jd_data, dict) else str(jd_data or "")
 
-        gist_dict = {}
-        for line in response_text.splitlines():
-            if ":" in line:
-                key, value = line.split(":", 1)
-                # 🔥 Clean up quotes and commas 🔥
-                key = key.strip().strip('"').strip("'")
-                value = value.strip().strip(',').strip('"').strip("'")
-                if value.lower() != 'null':  # Skip null values
-                    gist_dict[key] = value
-                #gist_dict[key.strip()] = value.strip()
-        if gist_dict:
-            return gist_dict
+        # Pre-extract some fields
+        email = extract_email(resume_text)
+        phone = extract_phone(resume_text)
+        links = extract_links(resume_text)
+        name = extract_name_from_text(resume_text)
+        yoe = extract_years_of_experience(resume_text)
+        linkedin = None
+        github = None
+        for l in links:
+            if "linkedin.com" in l.lower():
+                linkedin = l
+            if "github.com" in l.lower():
+                github = l
 
-        # last resort
-        return {"summary": response_text.strip() or "No structured output."}
+        answers = {}
 
-
-
-# Expanded fallback answers — covers LinkedIn, GitHub, location, etc.
-FALLBACK_GISTS = {
-    "work authorization": "Authorized to work in India",
-    "notice period": "Immediate",
-    "availability": "Immediate",
-    "salary": "As per company standards",
-    "expected salary": "As per industry standards",
-    "visa": "Not applicable (Indian Citizen)",
-    "relocation": "Yes, open to relocation",
-    "employment type": "Full-time",
-    "why do you want to work": "Excited about the role and the company’s impact in technology.",
-    "cover letter": (
-        "I'm passionate about technology and eager to contribute to your mission. "
-        "My background in software engineering and automation aligns well with this opportunity."
-    ),
-    # 👇 newly added useful fallbacks
-    "location": "India",
-    "city": "",
-    "state": "",
-    "country": "India",
-}
-
-
-async def generate_gist(parsed_resume: dict, jd_data: dict, form_fields: list) -> dict:
-    """
-    Generates short, relevant answers for each form field using:
-      1. Parsed resume values (preferred)
-      2. LLM-generated gist answers
-      3. Fallback defaults (if both missing)
-    """
-    gist_answers = {}
-
-    try:
-        logger.info("🧠 Generating gist answers from resume + JD + detected form fields...")
-
-        # Normalize field list
-        normalized_questions = []
-        for f in form_fields:
-            if isinstance(f, dict):
-                q = f.get("aria_label") or f.get("label_text") or f.get("placeholder") or f.get("name")
-                if q:
-                    normalized_questions.append(q)
-            elif isinstance(f, str):
-                normalized_questions.append(f)
-        form_fields = normalized_questions
-
-        # --- STEP 1: Try direct matches from resume ---
-        resume_map = {
-            "First Name": parsed_resume.get("first_name"),
-            "Last Name": parsed_resume.get("last_name"),
-            "Email": parsed_resume.get("email"),
-            "Phone": parsed_resume.get("phone"),
-            "LinkedIn Profile": parsed_resume.get("linkedin"),
-            "Website / Github Profile": parsed_resume.get("github") or parsed_resume.get("portfolio"),
-            "linkedin": parsed_resume.get("linkedin"),
-            "github": parsed_resume.get("github"),
-            "portfolio": parsed_resume.get("portfolio"),
-            "website": parsed_resume.get("website") or parsed_resume.get("github"),
-            "location": parsed_resume.get("location") or "India",
-            "email": parsed_resume.get("email"),
-            "phone": parsed_resume.get("phone"),
-            "name": f"{parsed_resume.get('first_name', '')} {parsed_resume.get('last_name', '')}".strip(),
-        }
-
-        # Add direct field matches
-        for q in form_fields:
-            # Exact match first
-            if q in resume_map and resume_map[q]:
-                gist_answers[q] = resume_map[q]
+        for lbl in labels:
+            lbl_norm = (lbl or "").strip()
+            if not lbl_norm:
                 continue
-            
-            # Case-insensitive partial match
-            q_lower = q.lower()
-            for key, val in resume_map.items():
-                if val and key.lower() in q_lower:
-                    gist_answers[q] = val
-                    break
 
-        logger.debug(f"📄 Prefilled from resume: {list(gist_answers.keys())}")
+            # Exact/common label matches
+            if re.search(r'first\s*name', lbl_norm, re.I) or re.search(r'full\s*name', lbl_norm, re.I) or re.search(r'name', lbl_norm, re.I) and len(lbl_norm) < 40:
+                answers[lbl] = name or ""
+                continue
+            if re.search(r'email', lbl_norm, re.I):
+                answers[lbl] = email or ""
+                continue
+            if re.search(r'phone|mobile|contact', lbl_norm, re.I):
+                answers[lbl] = phone or ""
+                continue
+            if re.search(r'linkedin', lbl_norm, re.I):
+                answers[lbl] = linkedin or email or ""
+                continue
+            if re.search(r'github|portfolio|website', lbl_norm, re.I):
+                answers[lbl] = github or ""
+                continue
+            if re.search(r'years.*experience|total.*years|yoe|years of experience', lbl_norm, re.I):
+                answers[lbl] = yoe or ""
+                continue
 
-        # --- STEP 2: Handle experience/skill-based questions ---
-        # Extract years of experience from resume
-        import re
-        resume_text = parsed_resume.get("raw_text", "")
-        
-        # Try to find years of experience
-        years_match = re.search(r'(\d+)[-+]?\s*years?\s+(?:of\s+)?experience', resume_text.lower())
-        total_years = years_match.group(1) if years_match else None
-        
-        # Calculate from work history dates if available
-        if not total_years:
-            dates = re.findall(r'20\d{2}', resume_text)
-            if len(dates) >= 2:
-                total_years = str(int(max(dates)) - int(min(dates)))
-        
-        if not total_years:
-            # Default based on Senior title
-            if 'senior' in resume_text.lower():
-                total_years = "5-7"
+            # Tech / yes-no questions
+            if is_yes_no_question(lbl_norm):
+                tech = detect_technology_from_label(lbl_norm)
+                if tech:
+                    answers[lbl] = "Yes" if tech in resume_text.lower() else "No"
+                    continue
+                # generic fallback yes for safe default
+                answers[lbl] = "Yes"
+                continue
+
+            # Numeric preference / salary / notice period
+            if re.search(r'salary|compensation', lbl_norm, re.I):
+                answers[lbl] = "As per company standards"
+                continue
+            if re.search(r'notice period', lbl_norm, re.I):
+                answers[lbl] = "30 days"
+                continue
+            if re.search(r'relocation', lbl_norm, re.I):
+                answers[lbl] = "Yes"
+                continue
+
+            # Try to match from resume by token overlap with label
+            best_score = 0.0
+            best_snippet = ""
+            # take top N snippets from resume (split into sentences)
+            snippets = re.split(r'[\n\r]+|\.\s+', resume_text)[:200]
+            for s in snippets:
+                score = simple_token_overlap(lbl_norm, s)
+                if score > best_score:
+                    best_score = score
+                    best_snippet = s
+            if best_score >= 0.25:
+                # trim snippet to 200 chars
+                answers[lbl] = (best_snippet.strip()[:200])
+                continue
+
+            # As a last deterministic fallback, try check JD for label-specific hints
+            best_score_jd = 0.0
+            best_snippet_jd = ""
+            jd_snips = re.split(r'[\n\r]+|\.\s+', jd_text or "")[:200]
+            for s in jd_snips:
+                sc = simple_token_overlap(lbl_norm, s)
+                if sc > best_score_jd:
+                    best_score_jd = sc
+                    best_snippet_jd = s
+            if best_score_jd >= 0.25:
+                answers[lbl] = best_snippet_jd.strip()[:200]
+                continue
+
+            # If still nothing, ask LLM (optional)
+            if _LLM_AVAILABLE:
+                try:
+                    prompt = f"""You are filling a job application question for a candidate.
+Candidate resume text:
+{resume_text[:3000]}
+
+Question (label): {lbl_norm}
+Give a concise (one-liner) answer as the candidate would. If you cannot infer, answer with an empty string.
+Return only the answer text."""
+                    llm_resp = await call_gpt_model(prompt)
+                    # take up to 300 chars
+                    if isinstance(llm_resp, str) and llm_resp.strip():
+                        answers[lbl] = llm_resp.strip()[:300]
+                        continue
+                except Exception as e:
+                    logger.debug(f"LLM fallback failed for label '{lbl}': {e}")
+
+            # Final absolute fallback (short generic text)
+            if re.search(r'cover|why do you want', lbl_norm, re.I):
+                answers[lbl] = "I'm excited about this opportunity and confident my experience aligns with the role."
             else:
-                total_years = "3-5"
+                answers[lbl] = ""
 
-        # Add experience-based answers
-        for q in form_fields:
-            if q in gist_answers:
-                continue
-                
-            q_lower = q.lower()
-            
-            # Years of experience questions
-            if "total" in q_lower and "years" in q_lower and "experience" in q_lower:
-                gist_answers[q] = f"{total_years} years" if total_years else "5-7 years"
-            
-            # Technology-specific experience (React, Python, etc.)
-            elif "experience in" in q_lower or "experience with" in q_lower:
-                # Check if technology is in resume
-                tech_keywords = ["react", "python", "javascript", "node", "vue", "angular"]
-                for tech in tech_keywords:
-                    if tech in q_lower:
-                        if tech in resume_text.lower():
-                            gist_answers[q] = "Yes"
-                        else:
-                            gist_answers[q] = "No"
-                        break
-            
-            # Unit testing / QA questions
-            elif "test" in q_lower and "unit" in q_lower:
-                if "test" in resume_text.lower():
-                    gist_answers[q] = "Yes"
-                else:
-                    gist_answers[q] = "Yes"  # Default to Yes for senior developers
-            
-            # AI/Tools questions
-            elif "ai" in q_lower and "tool" in q_lower:
-                gist_answers[q] = "Yes"
-            
-            # Relocation questions
-            elif "relocat" in q_lower:
-                if "bangalore" in q_lower or "bengaluru" in q_lower:
-                    current_location = parsed_resume.get("location", "").lower()
-                    if "bangalore" in current_location or "bengaluru" in current_location:
-                        gist_answers[q] = "Already in Bangalore"
-                    else:
-                        gist_answers[q] = "Yes"
-                else:
-                    gist_answers[q] = "Open to discussion"
-            
-            # Notice period
-            elif "notice" in q_lower and "period" in q_lower:
-                gist_answers[q] = "30 days"
-            
-            # Salary expectations
-            elif "salary" in q_lower or "compensation" in q_lower:
-                gist_answers[q] = "As per company standards"
-            
-            # Current offers
-            elif "current offer" in q_lower or "other offer" in q_lower:
-                gist_answers[q] = "No"
-            
-            # Authorization
-            elif "authorization" in q_lower or "authorized" in q_lower:
-                gist_answers[q] = "Yes"
-            
-            # Visa
-            elif "visa" in q_lower:
-                gist_answers[q] = "Not required (Indian Citizen)"
-
-        logger.debug(f"📊 After heuristics: {list(gist_answers.keys())}")
-
-        # --- STEP 3: LLM-based generation (for remaining fields) ---
-        missing_questions = [q for q in form_fields if q not in gist_answers]
-        
-        if missing_questions:
-            logger.info(f"🤖 Asking LLM for {len(missing_questions)} remaining answers...")
-            
-            # ✅ Trim large inputs before sending to the model
-            trimmed_resume = {k: trim_text(str(v)) for k, v in parsed_resume.items()}
-            trimmed_jd = {k: trim_text(str(v)) for k, v in jd_data.items()}
-
-            prompt = f"""
-You are filling out a job application form on behalf of the candidate.
-
-Candidate: {parsed_resume.get('first_name', '')} {parsed_resume.get('last_name', '')}
-Total Experience: {total_years} years
-
-Answer these questions as if you ARE the candidate (first person).
-Keep answers SHORT (1-2 sentences max).
-
-Resume Summary:
-{trimmed_resume.get('raw_text', '')[:2000]}
-
-Questions:
-{json.dumps(missing_questions, indent=2)}
-
-Return ONLY valid JSON: {{"question": "answer", ...}}
-"""
-
-            try:
-                response_text = await call_gpt_model(prompt)
-                ai_output = safe_parse_gist_output(response_text)
-
-                if isinstance(ai_output, dict):
-                    for k, v in ai_output.items():
-                        if k not in gist_answers and v:
-                            gist_answers[k] = v
-                            logger.debug(f"  🤖 LLM answered: {k}")
-            except Exception as e:
-                logger.warning(f"⚠️ LLM gist generation skipped due to: {e}")
-
-        # --- STEP 4: Absolute fallback ---
-        if not gist_answers:
-            gist_answers = {
-                "General Statement": (
-                    "I'm excited about this opportunity and confident my experience aligns with the role."
-                )
-            }
-
-        logger.success(f"🧩 Gist answers ready for {len(gist_answers)} fields.")
-        logger.debug(f"📋 Final gist keys: {list(gist_answers.keys())}")
-        
-        return gist_answers
+        return answers
 
     except Exception as e:
-        logger.error(f"❌ Gist generation failed: {e}")
-        import traceback
-        logger.error(traceback.format_exc())
-        return {"error": str(e)}
+        logger.error(f"generate_gist_for_labels error: {e}")
+        return {lbl: "" for lbl in labels}
+
 

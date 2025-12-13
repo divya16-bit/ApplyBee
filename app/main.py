@@ -19,9 +19,7 @@ allowed = [
     "http://127.0.0.1:5173",
     "http://localhost:3000",
 ]
-frontend_env = os.getenv("FRONTEND_URL")
-if frontend_env:
-    allowed.append(frontend_env)
+
 
 # Allow all chrome-extension origins via regex
 app.add_middleware(
