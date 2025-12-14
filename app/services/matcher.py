@@ -17,8 +17,23 @@ from services.skill_normalizer import normalize_skills
 from datetime import datetime
 
 STOPWORDS = sk_text.ENGLISH_STOP_WORDS
-USE_SEMANTIC = str(os.getenv("MATCHER_SEMANTIC", "1")).lower() not in {"0", "false", "no"}
-#USE_SEMANTIC = str(os.getenv("MATCHER_SEMANTIC", "0")).lower() not in {"0", "false", "no"}  # ← Changed "1" to "0"
+# Separate flags for different use cases
+# MATCHER_SEMANTIC_SCORE: Use semantic matching for resume score (slow but accurate)
+# MATCHER_SEMANTIC_NORMALIZER: Use semantic matching for skill normalization (fast, small model)
+USE_SEMANTIC_SCORE = str(os.getenv("MATCHER_SEMANTIC_SCORE", "0")).lower() not in {"0", "false", "no"}  # Default OFF for speed
+USE_SEMANTIC_NORMALIZER = str(os.getenv("MATCHER_SEMANTIC_NORMALIZER", "1")).lower() not in {"0", "false", "no"}  # Default ON (fast)
+
+# Legacy support: MATCHER_SEMANTIC controls both if set
+LEGACY_SEMANTIC = str(os.getenv("MATCHER_SEMANTIC", "")).lower()
+if LEGACY_SEMANTIC and LEGACY_SEMANTIC not in {"0", "false", "no"}:
+    USE_SEMANTIC_SCORE = True
+    USE_SEMANTIC_NORMALIZER = True
+elif LEGACY_SEMANTIC in {"0", "false", "no"}:
+    USE_SEMANTIC_SCORE = False
+    USE_SEMANTIC_NORMALIZER = False
+
+# For backward compatibility in code
+USE_SEMANTIC = USE_SEMANTIC_SCORE  # Used for score calculation
 
 
 # -----------------------------
@@ -249,14 +264,15 @@ def get_model() -> SentenceTransformer:
     return _semantic_model
 
 # ✅ PRE-LOAD MODEL ON MODULE IMPORT (during server startup)
-USE_SEMANTIC = str(os.getenv("MATCHER_SEMANTIC", "1")).lower() not in {"0", "false", "no"}
-if USE_SEMANTIC:
-    print("🚀 Pre-loading model at startup...")
+# Only pre-load if semantic matching is enabled for score calculation
+if USE_SEMANTIC_SCORE:
+    print("🚀 Pre-loading semantic model for score calculation...")
     try:
         _ = get_model()
         print("✅ Model ready for requests")
     except Exception as e:
         print(f"❌ Failed to load model: {e}")
+        USE_SEMANTIC_SCORE = False
         USE_SEMANTIC = False
 
 def chunk_text_words(text: str, chunk_size: int = 220, overlap: int = 40) -> List[str]:
@@ -291,7 +307,7 @@ def tfidf_score(a: str, b: str) -> float:
         return 0.0
 
 def semantic_score_against_chunks(resume_chunks_emb: torch.Tensor, section_text: str) -> float:
-    if not USE_SEMANTIC:
+    if not USE_SEMANTIC_SCORE:
         return 0.0
     if not section_text.strip():
         return 0.0
@@ -305,8 +321,9 @@ def semantic_score_against_chunks(resume_chunks_emb: torch.Tensor, section_text:
 
 def section_match(resume_text_norm: str, resume_chunks_emb: torch.Tensor, section_text_raw: str) -> Tuple[float, float, float]:
     tfidf = tfidf_score(resume_text_norm, preprocess_text(section_text_raw))
-    sem = semantic_score_against_chunks(resume_chunks_emb, section_text_raw)
-    combined = (0.6 * sem) + (0.4 * tfidf)
+    sem = semantic_score_against_chunks(resume_chunks_emb, section_text_raw) if USE_SEMANTIC_SCORE else 0.0
+    # If semantic is disabled, use TF-IDF only (faster)
+    combined = (0.6 * sem) + (0.4 * tfidf) if USE_SEMANTIC_SCORE else tfidf
     return combined, tfidf, sem
 
 # -----------------------------
@@ -377,7 +394,7 @@ def calculate_match_score_text(
         }
 
     resume_text_norm = preprocess_text(resume_text_raw)
-    _, resume_chunks_emb = embed_chunks(resume_text_raw, chunk_size=220, overlap=40) if USE_SEMANTIC else ([], torch.zeros(0))
+    _, resume_chunks_emb = embed_chunks(resume_text_raw, chunk_size=220, overlap=40) if USE_SEMANTIC_SCORE else ([], torch.zeros(0))
 
     def join(name: str) -> str:
         return "\n".join(jd_sections.get(name, []) or [])
@@ -412,6 +429,7 @@ def calculate_match_score_text(
     # Skill Extraction & Normalization
     # -----------------------------
     resume_skills = extract_skills_simple(resume_text_raw)
+    logger.info(f"🔍 Resume skills extracted: {len(resume_skills)} skills")
     
     # Extract skills from jd_skills_extracted - filter to only technical skills
     if jd_skills_extracted:
@@ -426,9 +444,12 @@ def calculate_match_score_text(
         jd_skill_terms = extracted_skills if extracted_skills else extract_skills_simple(jd_skills_raw)
     else:
         jd_skill_terms = extract_skills_simple(jd_skills_raw)
+    
+    logger.info(f"🔍 JD skills extracted: {len(jd_skill_terms)} skills, sample: {list(jd_skill_terms)[:10]}")
    
     common = sorted(list(resume_skills & jd_skill_terms))[:30]
     missing = sorted(list(jd_skill_terms - resume_skills))[:30]
+    logger.info(f"🔍 Common skills: {len(common)}, Missing skills (before filters): {len(missing)}, sample: {missing[:10]}")
     
     # Filter missing skills to remove any that look like job descriptions (safety check)
     # Keep only short technical terms (max 30 chars) that are actual skills
@@ -436,16 +457,19 @@ def calculate_match_score_text(
     missing = [m for m in missing if len(m) <= 30 and m not in NOISE_TOKENS and m not in GENERIC_DOMAIN_TERMS]
     
     # Additional filter using skill normalizer: exclude skills that normalize poorly
-    # Skills that normalize to "other" with very low score are likely too generic
-    # But be less aggressive - keep skills that might be valid even if not in our categories
+    # BUT: Keep skills that are in TECH_SKILLS (they're known valid skills)
+    # Only filter out skills that are NOT in TECH_SKILLS AND normalize very poorly
     if missing:
+        logger.info(f"🔍 Missing skills before normalization: {missing[:10]}")
         missing_norm = normalize_skills(missing, threshold=0.4)
-        # Keep skills that either:
-        # 1. Normalize to a specific category (not "other"), OR
-        # 2. Have a reasonable similarity score even if "other" (>= 0.3) - might be a valid skill not in categories
-        # This is less strict to avoid filtering out valid technical skills
+        # Keep skills that:
+        # 1. Are in TECH_SKILLS (known valid technical skills) - check lowercase, OR
+        # 2. Normalize to a specific category (not "other"), OR
+        # 3. Have any similarity score (>= 0.1) - very lenient to avoid filtering out valid skills
+        missing_before = len(missing)
         missing = [m for m, (_, cat, score) in zip(missing, missing_norm) 
-                   if cat != "other" or score >= 0.3]
+                   if m.lower() in TECH_SKILLS or cat != "other" or score >= 0.1]
+        logger.info(f"🔍 Missing skills after normalization filter: {missing[:10]} (was {missing_before}, now {len(missing)})")
 
     # Normalize both resume and JD skills
     resume_norm = normalize_skills(list(resume_skills))
@@ -623,13 +647,33 @@ def calculate_match_score_text(
             else:
                 yoe_score = max(30.0, 100.0 - (shortage * 20))
 
-    
-    ats_score = (
-        (0.30 * resp_combined) +
-        (0.35 * direct_skill_score) +
-        (0.25 * contextual_skill_score) +
-        (0.10 * yoe_score)
-    )
+    # Adjust weights based on whether semantic matching is enabled
+    # When semantic is disabled, TF-IDF scores are typically lower, so we:
+    # 1. Give more weight to direct skill matching (most reliable)
+    # 2. Give more weight to YoE (objective measure)
+    # 3. Boost TF-IDF scores slightly to compensate
+    if USE_SEMANTIC_SCORE:
+        # Original weights with semantic matching
+        ats_score = (
+            (0.30 * resp_combined) +
+            (0.35 * direct_skill_score) +
+            (0.25 * contextual_skill_score) +
+            (0.10 * yoe_score)
+        )
+    else:
+        # Adjusted weights without semantic matching - more emphasis on direct skills and YoE
+        # Boost TF-IDF scores slightly to compensate for lower semantic scores
+        resp_boosted = min(100.0, resp_combined * 1.4)  # Boost TF-IDF by 40%
+        skills_boosted = min(100.0, skills_combined * 1.4)  # Boost TF-IDF by 40%
+        resp_combined_adj = (resp_boosted + resp_combined) / 2  # Average of boosted and original
+        skills_combined_adj = (skills_boosted + skills_combined) / 2
+        
+        ats_score = (
+            (0.20 * resp_combined_adj) +  # Reduced from 0.30
+            (0.50 * direct_skill_score) +  # Increased from 0.35 (most reliable)
+            (0.15 * contextual_skill_score) +  # Reduced from 0.25
+            (0.15 * yoe_score)  # Increased from 0.10 (objective measure)
+        )
     
     
     # -----------------------------
@@ -676,8 +720,9 @@ def calculate_match_score_text(
             f"ATS Score: {ats_score:.2f}% "
             f"(Responsibilities: {resp_combined:.1f}% [T:{resp_tfidf:.1f}/S:{resp_sem:.1f}], "
             f"Skills: {skills_combined:.1f}% [T:{skills_tfidf:.1f}/S:{skills_sem:.1f}], "
-            f"Skills Overlap: {len(common)} direct, {len(normalized_overlap)} contextual."
+            f"Skills Overlap: {len(common)} direct, {len(normalized_overlap)} contextual. "
             f"Resume YoE={resume_yoe}, JD YoE={jd_yoe}, YoE Score={yoe_score:.1f}"
+            f"{' [Fast Mode: TF-IDF only]' if not USE_SEMANTIC_SCORE else ''}"
         ),
         "raw_section_scores": {
             "responsibilities": {"combined": resp_combined, "tfidf": resp_tfidf, "semantic": resp_sem},

@@ -14,8 +14,13 @@ def get_normalizer_model():
         print("✅ Normalizer model loaded")
     return _model
 
-# Pre-load if semantic matching enabled
-if os.getenv("MATCHER_SEMANTIC", "1") != "0":
+# Pre-load if semantic matching enabled for normalizer
+# Check both legacy MATCHER_SEMANTIC and new MATCHER_SEMANTIC_NORMALIZER
+USE_NORMALIZER = (
+    os.getenv("MATCHER_SEMANTIC_NORMALIZER", "1") != "0" or
+    (os.getenv("MATCHER_SEMANTIC", "") != "0" and os.getenv("MATCHER_SEMANTIC", "") != "")
+)
+if USE_NORMALIZER:
     try:
         model = get_normalizer_model()
     except Exception as e:
