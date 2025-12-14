@@ -156,42 +156,64 @@ def name_like(s: str):
     return True
 
 def extract_location(text: str):
-    """Extract location (city, state) from resume - prioritize header, avoid work experience"""
+    """Extract location (city, state) from resume - prioritize header, STRICTLY avoid work experience"""
     if not text:
         return None
     
-    # Priority 1: Look in header/contact section (first 10 lines) - avoid work experience
-    header_text = "\n".join(text.split('\n')[:10])
-    lines = header_text.split('\n')
+    # Split text into lines
+    lines = text.split('\n')
     
-    for line in lines:
-        line = line.strip()
-        # Skip if it looks like work experience (contains job titles, dates, etc.)
-        if any(word in line.lower() for word in ['experience', 'developer', 'engineer', 'manager', 'software', '20', '19']):
+    # Priority 1: Look ONLY in header/contact section (first 8 lines) - before any work experience
+    # Stop at first occurrence of work experience keywords
+    header_lines = []
+    for i, line in enumerate(lines[:15]):  # Check first 15 lines but stop at work experience
+        line_lower = line.lower()
+        # Stop if we hit work experience section
+        if any(keyword in line_lower for keyword in ['work experience', 'employment', 'professional experience', 'career', 'experience:']):
+            break
+        # Skip if it looks like work experience entry (has dates, job titles)
+        if re.search(r'(19|20)\d{2}', line) and any(word in line_lower for word in ['developer', 'engineer', 'manager', 'software', 'analyst', 'consultant']):
             continue
-        # Skip if it looks like a name or email
-        if '@' in line or len(line.split()) > 5:
+        header_lines.append(line)
+    
+    header_text = "\n".join(header_lines)
+    
+    # Look for location patterns in header only
+    for line in header_lines:
+        line = line.strip()
+        # Skip if it looks like a name, email, phone, or link
+        if '@' in line or 'http' in line.lower() or re.search(r'\+?\d{10,}', line):
+            continue
+        # Skip if too long (likely not location)
+        if len(line.split()) > 4:
             continue
         # Check if it contains location-like patterns (City, State)
         location_match = re.search(r'([A-Z][a-z]+(?:\s+[A-Z][a-z]+)*),\s*([A-Z]{2}|[A-Z][a-z]+(?:\s+[A-Z][a-z]+)*)', line)
         if location_match:
-            # Clean up - only return City, State (remove country and extra text)
             location_str = location_match.group(0).strip()
             # Remove any trailing text that's not part of location
-            location_str = re.sub(r'\s+(Software|Developer|Engineer|Manager|Experience).*$', '', location_str, flags=re.IGNORECASE)
-            return location_str.strip()
+            location_str = re.sub(r'\s+(Software|Developer|Engineer|Manager|Experience|Frontend|Backend|Full|Stack).*$', '', location_str, flags=re.IGNORECASE)
+            # Don't return if it contains work-related keywords
+            if not any(word in location_str.lower() for word in ['software', 'developer', 'engineer', 'manager']):
+                return location_str.strip()
     
-    # Priority 2: Look for location patterns in header section
+    # Priority 2: Look for location patterns in header text (without work keywords)
     location_patterns = [
         r'([A-Z][a-z]+(?:\s+[A-Z][a-z]+)*),\s*([A-Z]{2}|[A-Z][a-z]+(?:\s+[A-Z][a-z]+)*)',  # City, State
     ]
     
     for pattern in location_patterns:
-        m = re.search(pattern, header_text)
-        if m:
+        matches = list(re.finditer(pattern, header_text))
+        for m in matches:
             location_str = m.group(0).strip()
+            # Don't return if it's clearly from work experience
+            context_start = max(0, m.start() - 50)
+            context_end = min(len(header_text), m.end() + 50)
+            context = header_text[context_start:context_end].lower()
+            if any(word in context for word in ['software', 'developer', 'engineer', 'manager', 'experience', 'lyric', 'startup']):
+                continue
             # Clean up - remove any trailing job-related text
-            location_str = re.sub(r'\s+(Software|Developer|Engineer|Manager|Experience).*$', '', location_str, flags=re.IGNORECASE)
+            location_str = re.sub(r'\s+(Software|Developer|Engineer|Manager|Experience|Frontend|Backend).*$', '', location_str, flags=re.IGNORECASE)
             return location_str.strip()
     
     return None
@@ -277,32 +299,128 @@ def extract_country(text: str):
     
     return None
 
+def parse_date_to_months(date_str: str) -> int:
+    """Convert date string to months since year 0 (for duration calculation)"""
+    if not date_str:
+        return 0
+    
+    from datetime import datetime
+    CURRENT_YEAR = datetime.now().year
+    CURRENT_MONTH = datetime.now().month
+    
+    date_str = date_str.lower().strip()
+    
+    # Handle "present" or "current"
+    if any(word in date_str for word in ["present", "current", "now", "ongoing"]):
+        return CURRENT_YEAR * 12 + CURRENT_MONTH
+    
+    # Try to extract year (required)
+    year_match = re.search(r'\b(19|20)\d{2}\b', date_str)
+    if not year_match:
+        return 0
+    
+    year = int(year_match.group(0))
+    
+    # Try to extract month
+    month_names = {
+        "jan": 1, "january": 1, "feb": 2, "february": 2,
+        "mar": 3, "march": 3, "apr": 4, "april": 4,
+        "may": 5, "jun": 6, "june": 6,
+        "jul": 7, "july": 7, "aug": 8, "august": 8,
+        "sep": 9, "sept": 9, "september": 9,
+        "oct": 10, "october": 10, "nov": 11, "november": 11,
+        "dec": 12, "december": 12
+    }
+    
+    month = 1  # Default to January if month not specified
+    for month_name, month_num in month_names.items():
+        if month_name in date_str:
+            month = month_num
+            break
+    
+    return year * 12 + month
+
 def extract_years_of_experience(text: str):
-    """Extract years of experience, returns numeric value (int) for dropdown matching"""
+    """Extract years of experience, returns numeric value (int) for dropdown matching
+    Calculates from employment dates if explicit years not found"""
+    if not text:
+        return None
+    
     txt = (text or "").lower()
-    # Look for patterns like '5 years', '5+ years', '4 yrs', 'total years of experience: 3'
-    # Also handle ranges like "5-7 years" or "5 to 7 years" - take the first number
-    m = re.search(r'(\d{1,2})(?:\s*[-–]\s*(\d{1,2}))?(?:\+)?\s*(?:years|yrs)\b', txt)
+    
+    # Priority 1: Look for explicit mentions like '5 years', '5+ years', '4 yrs'
+    m = re.search(r'(\d{1,2})(?:\s*[-–]\s*(\d{1,2}))?(?:\+)?\s*(?:years|yrs)\s*(?:of\s*)?(?:experience|exp)?\b', txt)
     if m:
-        # Return the numeric value (for dropdown matching) and formatted string (for display)
         years_num = int(m.group(1))
-        return years_num  # Return numeric for better dropdown matching
-    # look for date ranges and estimate
+        if 0 < years_num <= 50:
+            return years_num
+    
+    # Priority 2: Calculate from employment date ranges (like matcher.py does)
+    date_ranges = []
+    
+    # Enhanced date range patterns
+    patterns = [
+        r'(\b(?:jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)\w*\s+\d{4})\s*(?:[-–—]|to)\s*(\b(?:jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)\w*\s+\d{4}|present|current)',
+        r'(\b(?:19|20)\d{2})\s*(?:[-–—]|to)\s*(\b(?:19|20)\d{2}|present|current)',
+        r'(\b(?:jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)\w*\s+\d{4})\s*(?:[-–—]|to)\s*(present|current|now)',
+    ]
+    
+    for pattern in patterns:
+        matches = re.findall(pattern, text, re.IGNORECASE)
+        for start_str, end_str in matches:
+            start_months = parse_date_to_months(start_str)
+            end_months = parse_date_to_months(end_str)
+            
+            if start_months > 0 and end_months > 0 and end_months >= start_months:
+                duration_months = end_months - start_months
+                duration_years = duration_months / 12.0
+                
+                if 0 < duration_years <= 50:
+                    date_ranges.append({
+                        'start': start_months,
+                        'end': end_months,
+                        'duration': duration_years
+                    })
+    
+    # Remove overlapping periods and sum total
+    if date_ranges:
+        date_ranges.sort(key=lambda x: x['start'])
+        
+        merged = []
+        for current in date_ranges:
+            if not merged:
+                merged.append(current)
+            else:
+                last = merged[-1]
+                if current['start'] <= last['end']:
+                    last['end'] = max(last['end'], current['end'])
+                    last['duration'] = (last['end'] - last['start']) / 12.0
+                else:
+                    merged.append(current)
+        
+        total_years = sum(period['duration'] for period in merged)
+        
+        if total_years > 0:
+            return int(round(total_years))  # Return integer for dropdown matching
+    
+    # Priority 3: Simple year range estimation (fallback)
     years = re.findall(r'(19|20)\d{2}', text or "")
     if len(years) >= 2:
         try:
             low = int(min(years))
             high = int(max(years))
             est = high - low
-            if est > 0 and est <= 50:  # Reasonable range
-                return est  # Return numeric value for dropdown matching
+            if 0 < est <= 50:
+                return est
         except:
             pass
-    # fallback heuristics
-    if 'senior' in txt:
-        return 5  # Return numeric value
-    if 'intern' in txt.lower():
-        return 1  # Return numeric value (1 year for interns)
+    
+    # Priority 4: Heuristics based on job titles
+    if 'senior' in txt or 'lead' in txt or 'principal' in txt:
+        return 5
+    if 'intern' in txt or 'internship' in txt:
+        return 1
+    
     return None
 
 # -------------------------
