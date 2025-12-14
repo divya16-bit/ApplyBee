@@ -29,6 +29,21 @@ if USE_NORMALIZER:
 else:
     model = None
 
+# Cache category embeddings for performance (encode once, reuse many times)
+_category_embeddings_cache = {}
+
+def _get_category_embeddings(category, examples):
+    """Get cached embeddings for a category's examples."""
+    if category not in _category_embeddings_cache:
+        if model is not None:
+            try:
+                _category_embeddings_cache[category] = model.encode(examples, convert_to_tensor=True)
+            except Exception:
+                _category_embeddings_cache[category] = None
+        else:
+            _category_embeddings_cache[category] = None
+    return _category_embeddings_cache[category]
+
 # Expanded canonical categories
 CATEGORIES = {
     # Core programming
@@ -125,6 +140,7 @@ def normalize_skills(raw_skills, threshold: float = 0.6):
     """
     Takes a list of raw skills (strings) and maps them into normalized categories.
     Returns [(original, category, score)].
+    Optimized with caching and batch processing.
     """
     if not raw_skills:
         return []
@@ -136,10 +152,48 @@ def normalize_skills(raw_skills, threshold: float = 0.6):
         # Fallback if model couldn't load
         return [(skill, "other", 0.0) for skill in raw_skills]
 
+    # Fast path: For very small lists, use simple string matching (much faster)
+    if len(raw_skills) <= 5:
+        # For small lists, just check if skills match known category examples
+        results = []
+        for skill in raw_skills:
+            skill_lower = skill.lower()
+            # Quick check: is it a known tech skill in any category?
+            found_category = "other"
+            best_match_score = 0.0
+            for cat, examples in CATEGORIES.items():
+                # Check exact match first
+                if skill_lower in [ex.lower() for ex in examples]:
+                    found_category = cat
+                    best_match_score = 0.9
+                    break
+                # Check partial match
+                for ex in examples:
+                    if skill_lower in ex.lower() or ex.lower() in skill_lower:
+                        if len(ex) > 2:  # Avoid matching single letters
+                            found_category = cat
+                            best_match_score = 0.7
+                            break
+                if found_category != "other":
+                    break
+            results.append((skill, found_category, best_match_score))
+        return results
+
+    # Batch encode all skills at once (much faster than one-by-one)
+    try:
+        skill_embeds = model.encode(raw_skills, convert_to_tensor=True, show_progress_bar=False)
+    except Exception:
+        # Fallback to individual encoding if batch fails
+        skill_embeds = None
+
     results = []
-    for skill in raw_skills:
+    for idx, skill in enumerate(raw_skills):
         try:
-            skill_embed = model.encode(skill, convert_to_tensor=True)
+            # Use batch embedding if available, otherwise encode individually
+            if skill_embeds is not None:
+                skill_embed = skill_embeds[idx:idx+1]  # Get single embedding from batch
+            else:
+                skill_embed = model.encode(skill, convert_to_tensor=True)
         except Exception:
             results.append((skill, "other", 0.0))
             continue
@@ -147,7 +201,10 @@ def normalize_skills(raw_skills, threshold: float = 0.6):
         best_match = "other"
         best_score = 0.0
         for category, examples in CATEGORIES.items():
-            example_embeds = model.encode(examples, convert_to_tensor=True)
+            # Use cached embeddings (much faster!)
+            example_embeds = _get_category_embeddings(category, examples)
+            if example_embeds is None:
+                continue
             score = util.cos_sim(skill_embed, example_embeds).max().item()
             if score > best_score:
                 best_score = score

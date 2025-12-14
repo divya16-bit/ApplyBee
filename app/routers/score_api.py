@@ -29,6 +29,11 @@ async def resume_score_endpoint(req: ScoreRequest):
         legacy_semantic = os.getenv("MATCHER_SEMANTIC", "")
         logger.info(f"🔧 Config: MATCHER_SEMANTIC_SCORE={semantic_score}, MATCHER_SEMANTIC_NORMALIZER={semantic_normalizer}, MATCHER_SEMANTIC={legacy_semantic}")
         
+        # Warn if semantic scoring is enabled (will be slow)
+        if semantic_score not in {"0", "false", "no"} or (legacy_semantic and legacy_semantic not in {"0", "false", "no"}):
+            logger.warning("⚠️ WARNING: Semantic scoring is ENABLED. This will take 20-30 minutes and may timeout!")
+            logger.warning("⚠️ Set MATCHER_SEMANTIC_SCORE=0 and MATCHER_SEMANTIC=0 for fast mode (5-30 seconds)")
+        
         parsed_resume = req.parsed_resume or {}
         jd_sections = {}
         jd_full_text = ""
