@@ -156,33 +156,124 @@ def name_like(s: str):
     return True
 
 def extract_location(text: str):
-    """Extract location (city, state, country) from resume"""
+    """Extract location (city, state) from resume - prioritize header, avoid work experience"""
     if not text:
         return None
     
-    # Common location patterns
-    # Look for patterns like "City, State" or "City, State, Country"
-    location_patterns = [
-        r'([A-Z][a-z]+(?:\s+[A-Z][a-z]+)*),\s*([A-Z]{2}|[A-Z][a-z]+(?:\s+[A-Z][a-z]+)*)',  # City, State
-        r'([A-Z][a-z]+(?:\s+[A-Z][a-z]+)*),\s*([A-Z]{2}|[A-Z][a-z]+),\s*([A-Z][a-z]+)',  # City, State, Country
-    ]
+    # Priority 1: Look in header/contact section (first 10 lines) - avoid work experience
+    header_text = "\n".join(text.split('\n')[:10])
+    lines = header_text.split('\n')
     
-    for pattern in location_patterns:
-        m = re.search(pattern, text)
-        if m:
-            # Return the full location string
-            return m.group(0).strip()
-    
-    # Fallback: look for common city names or country names in first few lines
-    lines = text.split('\n')[:10]  # Check first 10 lines
     for line in lines:
         line = line.strip()
+        # Skip if it looks like work experience (contains job titles, dates, etc.)
+        if any(word in line.lower() for word in ['experience', 'developer', 'engineer', 'manager', 'software', '20', '19']):
+            continue
         # Skip if it looks like a name or email
         if '@' in line or len(line.split()) > 5:
             continue
-        # Check if it contains location-like patterns
-        if re.search(r'[A-Z][a-z]+,\s*[A-Z]', line):
-            return line
+        # Check if it contains location-like patterns (City, State)
+        location_match = re.search(r'([A-Z][a-z]+(?:\s+[A-Z][a-z]+)*),\s*([A-Z]{2}|[A-Z][a-z]+(?:\s+[A-Z][a-z]+)*)', line)
+        if location_match:
+            # Clean up - only return City, State (remove country and extra text)
+            location_str = location_match.group(0).strip()
+            # Remove any trailing text that's not part of location
+            location_str = re.sub(r'\s+(Software|Developer|Engineer|Manager|Experience).*$', '', location_str, flags=re.IGNORECASE)
+            return location_str.strip()
+    
+    # Priority 2: Look for location patterns in header section
+    location_patterns = [
+        r'([A-Z][a-z]+(?:\s+[A-Z][a-z]+)*),\s*([A-Z]{2}|[A-Z][a-z]+(?:\s+[A-Z][a-z]+)*)',  # City, State
+    ]
+    
+    for pattern in location_patterns:
+        m = re.search(pattern, header_text)
+        if m:
+            location_str = m.group(0).strip()
+            # Clean up - remove any trailing job-related text
+            location_str = re.sub(r'\s+(Software|Developer|Engineer|Manager|Experience).*$', '', location_str, flags=re.IGNORECASE)
+            return location_str.strip()
+    
+    return None
+
+def extract_country(text: str):
+    """Extract country name from resume - prioritize contact info over work experience"""
+    if not text:
+        return None
+    
+    # Common country names (case-insensitive matching)
+    common_countries = [
+        "India", "United States", "USA", "US", "United Kingdom", "UK", "Canada",
+        "Australia", "Germany", "France", "Spain", "Italy", "Netherlands",
+        "Brazil", "Mexico", "China", "Japan", "South Korea", "Singapore",
+        "United Arab Emirates", "UAE", "Saudi Arabia", "South Africa"
+    ]
+    
+    # Priority 1: Check phone number country code (+91 = India, +1 = US/Canada, etc.)
+    phone_match = re.search(r'\+(\d{1,3})', text)
+    if phone_match:
+        country_code = phone_match.group(1)
+        country_code_map = {
+            "91": "India",
+            "1": "United States",  # Could be US or Canada, default to US
+            "44": "United Kingdom",
+            "61": "Australia",
+            "49": "Germany",
+            "33": "France",
+            "34": "Spain",
+            "39": "Italy",
+            "31": "Netherlands",
+            "55": "Brazil",
+            "52": "Mexico",
+            "86": "China",
+            "81": "Japan",
+            "82": "South Korea",
+            "65": "Singapore",
+            "971": "United Arab Emirates",
+            "966": "Saudi Arabia",
+            "27": "South Africa"
+        }
+        if country_code in country_code_map:
+            return country_code_map[country_code]
+    
+    # Priority 2: Look in header/contact section (first 10 lines) - avoid work experience
+    header_text = "\n".join(text.split('\n')[:10])
+    lines = header_text.split('\n')
+    for line in lines:
+        line = line.strip()
+        # Skip if it looks like work experience (contains job titles, dates, etc.)
+        if any(word in line.lower() for word in ['experience', 'developer', 'engineer', 'manager', '20', '19']):
+            continue
+        if '@' in line or len(line.split()) > 5:
+            continue
+        # Check each word in the line against country names
+        words = line.split()
+        for word in words:
+            # Remove punctuation
+            word_clean = re.sub(r'[^\w]', '', word)
+            for country in common_countries:
+                if word_clean.lower() == country.lower() or (len(word_clean) > 3 and country.lower().startswith(word_clean.lower())):
+                    return country
+    
+    # Priority 3: Look for country in location patterns in header section only
+    location_pattern = r'([A-Z][a-z]+(?:\s+[A-Z][a-z]+)*),\s*([A-Z]{2}|[A-Z][a-z]+(?:\s+[A-Z][a-z]+)*),\s*([A-Z][a-z]+(?:\s+[A-Z][a-z]+)*)'
+    m = re.search(location_pattern, header_text)
+    if m and m.group(3):
+        country_part = m.group(3).strip()
+        # Check if it's a known country
+        for country in common_countries:
+            if country.lower() == country_part.lower() or country_part.lower() in country.lower() or country.lower() in country_part.lower():
+                return country
+    
+    # Priority 4: Fallback - look for "India" specifically (most common)
+    if re.search(r'\bIndia\b', text, re.IGNORECASE):
+        return "India"
+    
+    # Priority 5: Look for any country name anywhere (last resort)
+    for country in common_countries:
+        pattern = r'\b' + re.escape(country) + r'\b'
+        if re.search(pattern, text, re.IGNORECASE):
+            return country
     
     return None
 
@@ -209,9 +300,9 @@ def extract_years_of_experience(text: str):
             pass
     # fallback heuristics
     if 'senior' in txt:
-        return "5+ years"
+        return 5  # Return numeric value
     if 'intern' in txt.lower():
-        return "0-1 years"
+        return 1  # Return numeric value (1 year for interns)
     return None
 
 # -------------------------
@@ -313,6 +404,7 @@ async def generate_gist_for_labels(parsed_resume: Dict[str, Any], jd_data: Dict[
         links = extract_links(resume_text)
         name = extract_name_from_text(resume_text)
         location = extract_location(resume_text)
+        country = extract_country(resume_text)
         yoe = extract_years_of_experience(resume_text)
         linkedin = None
         github = None
@@ -350,10 +442,18 @@ async def generate_gist_for_labels(parsed_resume: Dict[str, Any], jd_data: Dict[
                 continue
             if re.search(r'years.*experience|total.*years|yoe|years of experience', lbl_norm, re.I):
                 # Return numeric value for dropdown matching (autofill.js will handle range matching)
-                if yoe:
+                if yoe and isinstance(yoe, (int, float)) and yoe > 0:
                     # Return as string (numeric) for both text fields and dropdowns
                     # autofill.js will parse it and match against dropdown ranges
-                    answers[lbl] = str(int(yoe)) if isinstance(yoe, (int, float)) else str(yoe)
+                    answers[lbl] = str(int(yoe))
+                elif yoe:
+                    # If yoe is a string or other format, try to extract number
+                    yoe_str = str(yoe)
+                    yoe_num_match = re.search(r'(\d+)', yoe_str)
+                    if yoe_num_match:
+                        answers[lbl] = yoe_num_match.group(1)
+                    else:
+                        answers[lbl] = ""
                 else:
                     answers[lbl] = ""
                 continue
@@ -361,6 +461,11 @@ async def generate_gist_for_labels(parsed_resume: Dict[str, Any], jd_data: Dict[
             # Location fields
             if re.search(r'location|city|current location|current city|address', lbl_norm, re.I):
                 answers[lbl] = location or ""
+                continue
+            
+            # Country fields (separate from location)
+            if re.search(r'country|nationality|citizenship', lbl_norm, re.I):
+                answers[lbl] = country or ""
                 continue
 
             # Salary / compensation expectations - collect for batch LLM (better answers)
