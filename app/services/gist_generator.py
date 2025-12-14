@@ -92,7 +92,8 @@ def safe_parse_gist_output(response_text: str) -> Dict[str, str]:
 # Basic extractors (resume)
 # -------------------------
 _email_re = re.compile(r'[\w\.-]+@[\w\.-]+\.\w+')
-_phone_re = re.compile(r'(\+?\d{1,3}[\s-]?)?(\d{6,12})')
+# Improved phone regex - better international format support
+_phone_re = re.compile(r'(\+?\d{1,3}[\s-]?)?\(?\d{1,4}\)?[\s-]?\d{1,4}[\s-]?\d{1,9}')
 _link_re = re.compile(r'(https?://[^\s]+)')
 _name_heuristics_re = re.compile(r'^[A-Z][a-z]+\s+[A-Z][a-z]+')  # naive first-last
 
@@ -101,10 +102,32 @@ def extract_email(text: str):
     return m.group(0).strip() if m else None
 
 def extract_phone(text: str):
-    m = _phone_re.search(text)
-    if not m:
+    """Extract phone number, prioritizing longer/more complete matches"""
+    # Try to find phone patterns - get all matches and pick the best one
+    matches = list(_phone_re.finditer(text))
+    if not matches:
+        # Fallback: try simpler pattern for international numbers
+        simple_match = re.search(r'\+?\d{10,15}', text.replace(' ', '').replace('-', ''))
+        if simple_match:
+            return simple_match.group(0)
         return None
-    return re.sub(r'\s+', '', m.group(0))
+    
+    # Prefer longer matches (more complete phone numbers)
+    best_match = None
+    best_length = 0
+    for m in matches:
+        phone_str = re.sub(r'[\s\-\(\)]+', '', m.group(0))
+        # Prefer matches with 10+ digits (complete phone numbers)
+        if len(phone_str) >= 10 and len(phone_str) > best_length:
+            best_match = phone_str
+            best_length = len(phone_str)
+    
+    if best_match:
+        return best_match
+    
+    # If no good match, return the first one cleaned up
+    phone_str = re.sub(r'[\s\-\(\)]+', '', matches[0].group(0))
+    return phone_str if len(phone_str) >= 10 else None
 
 def extract_links(text: str):
     return _link_re.findall(text or "")
@@ -132,12 +155,47 @@ def name_like(s: str):
             return False
     return True
 
+def extract_location(text: str):
+    """Extract location (city, state, country) from resume"""
+    if not text:
+        return None
+    
+    # Common location patterns
+    # Look for patterns like "City, State" or "City, State, Country"
+    location_patterns = [
+        r'([A-Z][a-z]+(?:\s+[A-Z][a-z]+)*),\s*([A-Z]{2}|[A-Z][a-z]+(?:\s+[A-Z][a-z]+)*)',  # City, State
+        r'([A-Z][a-z]+(?:\s+[A-Z][a-z]+)*),\s*([A-Z]{2}|[A-Z][a-z]+),\s*([A-Z][a-z]+)',  # City, State, Country
+    ]
+    
+    for pattern in location_patterns:
+        m = re.search(pattern, text)
+        if m:
+            # Return the full location string
+            return m.group(0).strip()
+    
+    # Fallback: look for common city names or country names in first few lines
+    lines = text.split('\n')[:10]  # Check first 10 lines
+    for line in lines:
+        line = line.strip()
+        # Skip if it looks like a name or email
+        if '@' in line or len(line.split()) > 5:
+            continue
+        # Check if it contains location-like patterns
+        if re.search(r'[A-Z][a-z]+,\s*[A-Z]', line):
+            return line
+    
+    return None
+
 def extract_years_of_experience(text: str):
+    """Extract years of experience, returns numeric value (int) for dropdown matching"""
     txt = (text or "").lower()
     # Look for patterns like '5 years', '5+ years', '4 yrs', 'total years of experience: 3'
-    m = re.search(r'(\d{1,2})(\+)?\s*(?:years|yrs)\b', txt)
+    # Also handle ranges like "5-7 years" or "5 to 7 years" - take the first number
+    m = re.search(r'(\d{1,2})(?:\s*[-–]\s*(\d{1,2}))?(?:\+)?\s*(?:years|yrs)\b', txt)
     if m:
-        return f"{m.group(1)} years"
+        # Return the numeric value (for dropdown matching) and formatted string (for display)
+        years_num = int(m.group(1))
+        return years_num  # Return numeric for better dropdown matching
     # look for date ranges and estimate
     years = re.findall(r'(19|20)\d{2}', text or "")
     if len(years) >= 2:
@@ -145,8 +203,8 @@ def extract_years_of_experience(text: str):
             low = int(min(years))
             high = int(max(years))
             est = high - low
-            if est > 0:
-                return f"{est} years"
+            if est > 0 and est <= 50:  # Reasonable range
+                return est  # Return numeric value for dropdown matching
         except:
             pass
     # fallback heuristics
@@ -254,6 +312,7 @@ async def generate_gist_for_labels(parsed_resume: Dict[str, Any], jd_data: Dict[
         phone = extract_phone(resume_text)
         links = extract_links(resume_text)
         name = extract_name_from_text(resume_text)
+        location = extract_location(resume_text)
         yoe = extract_years_of_experience(resume_text)
         linkedin = None
         github = None
@@ -290,7 +349,18 @@ async def generate_gist_for_labels(parsed_resume: Dict[str, Any], jd_data: Dict[
                 answers[lbl] = github or ""
                 continue
             if re.search(r'years.*experience|total.*years|yoe|years of experience', lbl_norm, re.I):
-                answers[lbl] = yoe or ""
+                # Return numeric value for dropdown matching (autofill.js will handle range matching)
+                if yoe:
+                    # Return as string (numeric) for both text fields and dropdowns
+                    # autofill.js will parse it and match against dropdown ranges
+                    answers[lbl] = str(int(yoe)) if isinstance(yoe, (int, float)) else str(yoe)
+                else:
+                    answers[lbl] = ""
+                continue
+            
+            # Location fields
+            if re.search(r'location|city|current location|current city|address', lbl_norm, re.I):
+                answers[lbl] = location or ""
                 continue
 
             # Salary / compensation expectations - collect for batch LLM (better answers)
