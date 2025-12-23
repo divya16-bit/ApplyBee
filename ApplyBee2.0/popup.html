@@ -1,0 +1,35 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>ApplyBee - AI Job Helper</title>
+  <link rel="stylesheet" href="popup.css" />
+</head>
+<body>
+  <div class="header">
+    <h2>ApplyBee 🐝</h2>
+    <p class="subtitle">Resume Score & Autofill</p>
+  </div>
+
+  <div class="section">
+    <label for="resumeInput" class="file-label">
+      <span class="file-label-text">📄 Upload Resume</span>
+      <input id="resumeInput" type="file" accept=".pdf,.docx,.txt" class="file-input" />
+    </label>
+  </div>
+
+  <div class="section">
+    <button id="checkScore" class="btn btn-primary">📊 Get Resume Score</button>
+    <button id="autofill" class="btn btn-secondary">✏️ Autofill Form</button>
+  </div>
+
+  <div id="status" class="status">Ready</div>
+
+  <script src="libs/pdf.min.js"></script>
+  <script src="popup.js" type="module"></script>
+</body>
+</html>
+
+

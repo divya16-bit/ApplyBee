@@ -1,0 +1,77 @@
+{
+  "manifest_version": 3,
+  "name": "ApplyBee",
+  "version": "1.0",
+  "description": "Resume score + autofill",
+
+  "icons": {
+    "16": "assets/icon.png",
+    "48": "assets/icon.png",
+    "128": "assets/icon.png"
+  },
+
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "ApplyBee 🐝",
+    "default_icon": {
+      "16": "assets/icon.png",
+      "48": "assets/icon.png",
+      "128": "assets/icon.png"
+    }
+  },
+
+  "permissions": [
+    "scripting",
+    "storage",
+    "tabs",
+    "activeTab"
+  ],
+
+  "host_permissions": [
+    "https://*.greenhouse.io/*",
+    "https://boards.greenhouse.io/*",
+    "https://job-boards.greenhouse.io/*",
+    "https://applybee.up.railway.app/*"
+  ],
+
+  "background": {
+  "service_worker": "background.js",
+  "type": "module"
+},
+
+
+  "content_scripts": [
+    {
+      "matches": [
+        "https://*.greenhouse.io/*",
+        "https://boards.greenhouse.io/*",
+        "https://job-boards.greenhouse.io/*"
+      ],
+      "js": ["contentScript.js"],
+      "run_at": "document_end"
+    }
+  ],
+
+  "web_accessible_resources": [
+    {
+      "resources": [
+        "contentScriptModule.js",
+        "libs/pdf.min.js",
+        "libs/pdf.worker.min.js",
+        "utils/detect.js",
+        "utils/autofill.js",
+        "utils/api.js"
+      ],
+      "matches": [
+        "https://*.greenhouse.io/*",
+        "https://boards.greenhouse.io/*",
+        "https://job-boards.greenhouse.io/*"
+      ]
+    }
+  ],
+  "content_security_policy": {
+    "extension_pages": "script-src 'self'; object-src 'self'"
+  }
+}
+
+
